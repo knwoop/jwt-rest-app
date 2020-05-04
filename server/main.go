@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	jwt "github.com/dgrijalva/jwt-go"
 )
@@ -12,7 +13,14 @@ import (
 var mySigningKey = []byte(os.Getenv("MY_JWT_TOKEN"))
 
 func homePage(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Super Secret Information")
+	auth, err := Parse(r.Header["Token"][0])
+	if err != nil {
+		fmt.Fprintf(w, "%s", err)
+		return
+	}
+	fmt.Fprintf(w, "userid: %s\n", auth.UserID)
+	fmt.Fprintf(w, "Super Secret Information\n")
+
 }
 
 func isAuthorized(endpoint func(http.ResponseWriter, *http.Request)) http.Handler {
@@ -36,6 +44,54 @@ func isAuthorized(endpoint func(http.ResponseWriter, *http.Request)) http.Handle
 			fmt.Fprintf(w, "Not Authorized")
 		}
 	})
+}
+
+const (
+	userKey  = "user"
+	expKey   = "exp"
+	lifetime = 30 * time.Minute
+)
+
+type Auth struct {
+	UserID string
+}
+
+func Parse(signedString string) (*Auth, error) {
+	token, err := jwt.Parse(signedString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return "", fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return mySigningKey, nil
+	})
+
+	if err != nil {
+		if ve, ok := err.(*jwt.ValidationError); ok {
+			if ve.Errors&jwt.ValidationErrorExpired != 0 {
+				return nil, fmt.Errorf("%s is expired: %w", signedString, err)
+			} else {
+				return nil, fmt.Errorf("%s is invalid: %w", signedString, err)
+			}
+		} else {
+			return nil, fmt.Errorf("%s is invalid: %w", signedString, err)
+		}
+	}
+
+	if token == nil {
+		return nil, fmt.Errorf("not found token in %s:", signedString)
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("not found claims in %s", signedString)
+	}
+	userID, ok := claims[userKey].(string)
+	if !ok {
+		return nil, fmt.Errorf("not found %s in %s", userKey, signedString)
+	}
+
+	return &Auth{
+		UserID: userID,
+	}, nil
 }
 
 func handleRequests() {
